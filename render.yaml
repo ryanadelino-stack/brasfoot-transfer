@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: brasfoot-transfer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free                      # troque para "starter" se precisar de mais memória
+    region: oregon                  # ou frankfurt se quiser mais próximo do Brasil
+    branch: main
+
+    # Render injeta PORT automaticamente; repassamos para o Spring
+    envVars:
+      - key: SERVER_PORT
+        sync: false                 # Render preenche automaticamente via $PORT
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+
+    # Health check — Render usa isso para saber se o container subiu
+    healthCheckPath: /api/transfer/health
+
+    # Auto-deploy a cada push na branch main
+    autoDeploy: true
