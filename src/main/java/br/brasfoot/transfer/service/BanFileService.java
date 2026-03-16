@@ -27,6 +27,14 @@ public class BanFileService {
   /** Conjunto de times cujo .ban foi modificado */
   private final Set<String> dirtyTeams = new HashSet<>();
 
+  /**
+   * Mapeamento manual: nomeNormalizado-do-time → chave interna do .ban
+   * Ex: "flamengo" → "flarj"
+   * Tem prioridade sobre o matching automático.
+   * Populado via loadMappings().
+   */
+  private final Map<String, String> manualMappings = new HashMap<>();
+
   // ─── Carregamento ────────────────────────────────────────────────────────────
 
   /**
@@ -37,6 +45,7 @@ public class BanFileService {
     loadedBans.clear();
     originalNames.clear();
     dirtyTeams.clear();
+    manualMappings.clear();
 
     for (MultipartFile f : banFiles) {
       if (f == null || f.isEmpty()) continue;
@@ -62,6 +71,25 @@ public class BanFileService {
             + "Certifique-se de que as classes e.g e e.t estão presentes.", e);
       } finally {
         Files.deleteIfExists(tmp);
+      }
+    }
+  }
+
+  /**
+   * Registra mapeamentos manuais: nome-do-time-no-excel → nome-do-arquivo-ban (sem .ban).
+   * Chamado após loadAll(), tem prioridade sobre o matching automático.
+   *
+   * @param mappings Map de { "Flamengo" → "flarj", "PSV" → "psv_hol" }
+   */
+  public void loadMappings(Map<String, String> mappings) {
+    if (mappings == null) return;
+    for (Map.Entry<String, String> entry : mappings.entrySet()) {
+      String teamKey = StringNormalizer.normalize(entry.getKey());
+      String banKey  = StringNormalizer.normalize(
+          entry.getValue().replaceAll("\.ban$", "")
+      );
+      if (!teamKey.isBlank() && !banKey.isBlank()) {
+        manualMappings.put(teamKey, banKey);
       }
     }
   }
@@ -96,6 +124,12 @@ public class BanFileService {
   private String resolveKey(String teamName) {
     if (teamName == null || teamName.isBlank()) return null;
     String search = StringNormalizer.normalize(teamName);
+
+    // 0. Mapeamento manual tem prioridade absoluta
+    if (manualMappings.containsKey(search)) {
+      String mappedKey = manualMappings.get(search);
+      if (loadedBans.containsKey(mappedKey)) return mappedKey;
+    }
 
     // 1. Exato
     if (loadedBans.containsKey(search)) return search;

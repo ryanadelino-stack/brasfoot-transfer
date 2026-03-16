@@ -8,6 +8,7 @@ import br.brasfoot.transfer.service.BanFileService;
 import br.brasfoot.transfer.service.BanTransferService;
 import br.brasfoot.transfer.service.TransferAnalysisService;
 import br.brasfoot.transfer.service.ExcelParserService;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
@@ -74,8 +75,9 @@ public class TransferController {
       produces = "application/zip"
   )
   public ResponseEntity<byte[]> process(
-      @RequestPart("transfers") MultipartFile transferFile,
-      @RequestPart("bans")      MultipartFile[] banFiles
+      @RequestPart("transfers")            MultipartFile   transferFile,
+      @RequestPart("bans")                 MultipartFile[] banFiles,
+      @RequestPart(value = "mappings", required = false) String mappingsJson
   ) {
     try {
       // 1. Parse Excel/CSV
@@ -85,6 +87,14 @@ public class TransferController {
       // 2. Carrega todos os .ban
       banService.loadAll(banFiles);
       log.info("Arquivos .ban carregados: {}", banFiles.length);
+
+      // 2b. Aplica mapeamentos manuais (se enviados)
+      if (mappingsJson != null && !mappingsJson.isBlank()) {
+        Map<String, String> mappings = objectMapper.readValue(
+            mappingsJson, new TypeReference<Map<String, String>>() {});
+        banService.loadMappings(mappings);
+        log.info("Mapeamentos manuais carregados: {}", mappings);
+      }
 
       // 3. Processa transferências
       TransferReport report = transferService.process(records);
@@ -112,12 +122,19 @@ public class TransferController {
       produces  = MediaType.APPLICATION_JSON_VALUE
   )
   public ResponseEntity<TransferReport> preview(
-      @RequestPart("transfers") MultipartFile transferFile,
-      @RequestPart("bans")      MultipartFile[] banFiles
+      @RequestPart("transfers")            MultipartFile   transferFile,
+      @RequestPart("bans")                 MultipartFile[] banFiles,
+      @RequestPart(value = "mappings", required = false) String mappingsJson
   ) {
     try {
       List<TransferRecord> records = parser.parse(transferFile);
       banService.loadAll(banFiles);
+      if (mappingsJson != null && !mappingsJson.isBlank()) {
+        Map<String, String> mappings = objectMapper.readValue(
+            mappingsJson, new TypeReference<Map<String, String>>() {});
+        banService.loadMappings(mappings);
+        log.info("Mapeamentos manuais (preview): {}", mappings);
+      }
       TransferReport report = transferService.process(records);
       return ResponseEntity.ok(report);
     } catch (Exception e) {
