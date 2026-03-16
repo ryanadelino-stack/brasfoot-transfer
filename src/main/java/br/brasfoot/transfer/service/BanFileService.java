@@ -86,7 +86,7 @@ public class BanFileService {
     for (Map.Entry<String, String> entry : mappings.entrySet()) {
       String teamKey = StringNormalizer.normalize(entry.getKey());
       String banKey  = StringNormalizer.normalize(
-          entry.getValue().replaceAll("\.ban$", "")
+          entry.getValue().replaceAll("\\.ban$", "")
       );
       if (!teamKey.isBlank() && !banKey.isBlank()) {
         manualMappings.put(teamKey, banKey);
