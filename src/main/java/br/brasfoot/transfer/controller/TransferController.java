@@ -1,10 +1,12 @@
 package br.brasfoot.transfer.controller;
 
 import br.brasfoot.transfer.model.TransferRecord;
+import br.brasfoot.transfer.model.AnalysisReport;
 import br.brasfoot.transfer.model.TransferReport;
 import br.brasfoot.transfer.model.TransferResult;
 import br.brasfoot.transfer.service.BanFileService;
 import br.brasfoot.transfer.service.BanTransferService;
+import br.brasfoot.transfer.service.TransferAnalysisService;
 import br.brasfoot.transfer.service.ExcelParserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -46,18 +48,21 @@ public class TransferController {
 
   private static final Logger log = LoggerFactory.getLogger(TransferController.class);
 
-  private final ExcelParserService  parser;
-  private final BanFileService      banService;
-  private final BanTransferService  transferService;
-  private final ObjectMapper        objectMapper;
+  private final ExcelParserService      parser;
+  private final BanFileService          banService;
+  private final BanTransferService      transferService;
+  private final TransferAnalysisService analysisService;
+  private final ObjectMapper            objectMapper;
 
   public TransferController(ExcelParserService parser,
                              BanFileService banService,
-                             BanTransferService transferService) {
-    this.parser          = parser;
-    this.banService      = banService;
-    this.transferService = transferService;
-    this.objectMapper    = new ObjectMapper()
+                             BanTransferService transferService,
+                             TransferAnalysisService analysisService) {
+    this.parser           = parser;
+    this.banService       = banService;
+    this.transferService  = transferService;
+    this.analysisService  = analysisService;
+    this.objectMapper     = new ObjectMapper()
         .enable(SerializationFeature.INDENT_OUTPUT);
   }
 
@@ -117,6 +122,33 @@ public class TransferController {
       return ResponseEntity.ok(report);
     } catch (Exception e) {
       log.error("Erro no preview: {}", e.getMessage(), e);
+      return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+    }
+  }
+
+  // ─── Endpoint de análise prévia: só o Excel, sem .ban ──────────────────────────
+
+  /**
+   * Analisa o arquivo de transferências SEM precisar dos .ban.
+   * Retorna quais times estão envolvidos + prévia de cada linha.
+   * Use isso para saber exatamente quais .ban buscar antes de processar.
+   */
+  @PostMapping(
+      value    = "/analyze",
+      consumes  = MediaType.MULTIPART_FORM_DATA_VALUE,
+      produces  = MediaType.APPLICATION_JSON_VALUE
+  )
+  public ResponseEntity<AnalysisReport> analyze(
+      @RequestPart("transfers") MultipartFile transferFile
+  ) {
+    try {
+      List<TransferRecord> records = parser.parse(transferFile);
+      log.info("Análise prévia: {} linhas lidas", records.size());
+      AnalysisReport report = analysisService.analyze(records);
+      log.info("Times envolvidos: {}", report.getTeamsInvolved());
+      return ResponseEntity.ok(report);
+    } catch (Exception e) {
+      log.error("Erro na análise prévia: {}", e.getMessage(), e);
       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
     }
   }
