@@ -318,7 +318,6 @@ public class BanFileService {
     String cn = obj.getClass().getName();
     return cn.equals("e.g") || cn.endsWith(".g");
   }
-}
 
   // ─── Métodos adicionais para BanTransferService ──────────────────────────────
 
