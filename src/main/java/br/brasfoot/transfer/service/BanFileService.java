@@ -319,3 +319,24 @@ public class BanFileService {
     return cn.equals("e.g") || cn.endsWith(".g");
   }
 }
+
+  // ─── Métodos adicionais para BanTransferService ──────────────────────────────
+
+  /** Retorna todas as chaves internas dos .ban carregados. */
+  public Set<String> loadedBanKeys() {
+    return Collections.unmodifiableSet(loadedBans.keySet());
+  }
+
+  /** Recupera o objeto do time pela chave interna (não pelo nome do Excel). */
+  public Object getBanByKey(String key) {
+    return loadedBans.get(key);
+  }
+
+  /**
+   * Expõe resolveKey publicamente para o BanTransferService poder verificar
+   * a chave interna sem precisar de um Object completo.
+   */
+  public String resolveTeamKey(String teamName) {
+    return resolveKey(teamName);
+  }
+}
