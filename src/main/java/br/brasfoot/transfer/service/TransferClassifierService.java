@@ -78,7 +78,6 @@ public class TransferClassifierService {
       "campeao div", "vice div", "terceiro div", "quarto div", "primeiro div",
       "campeao copa", "vice copa", "terceiro copa", "quarto copa",
       "semi norte", "semi sul", "semi leste", "semi oeste",
-      "score player", "equipe modo", "capitao modo",
       "por semi ", "vip master", "vip premium", "vip anterior",
       "funcao dep", "funcao coord",
       "negociacao cancelada", "anjos ciente",
