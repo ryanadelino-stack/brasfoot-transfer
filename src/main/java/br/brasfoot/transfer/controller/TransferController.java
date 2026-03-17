@@ -1,13 +1,13 @@
 package br.brasfoot.transfer.controller;
 
-import br.brasfoot.transfer.model.TransferRecord;
 import br.brasfoot.transfer.model.AnalysisReport;
+import br.brasfoot.transfer.model.TransferRecord;
 import br.brasfoot.transfer.model.TransferReport;
 import br.brasfoot.transfer.model.TransferResult;
 import br.brasfoot.transfer.service.BanFileService;
 import br.brasfoot.transfer.service.BanTransferService;
-import br.brasfoot.transfer.service.TransferAnalysisService;
 import br.brasfoot.transfer.service.ExcelParserService;
+import br.brasfoot.transfer.service.TransferAnalysisService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -25,23 +25,15 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * API REST para o sistema de transferências.
+ * API REST do sistema de transferências.
  *
- * ──────────────────────────────────────────────────────────────────────────────
- * POST /api/transfer/process
- *   Parâmetros (multipart/form-data):
- *     - transfers : arquivo Excel (.xlsx) ou CSV com as transferências da liga
- *     - bans      : um ou mais arquivos .ban (um por clube)
+ * POST /api/transfer/analyze  — só o Excel; retorna times envolvidos + prévia
+ * POST /api/transfer/preview  — Excel + .ban; simula (retorna JSON)
+ * POST /api/transfer/process  — Excel + .ban; aplica (retorna ZIP)
+ * GET  /api/transfer/health   — health check
  *
- *   Resposta: arquivo ZIP contendo:
- *     - report.json          : relatório completo em JSON
- *     - <NomeClube>.ban      : arquivos .ban modificados
- * ──────────────────────────────────────────────────────────────────────────────
- *
- * POST /api/transfer/preview
- *   Mesmos parâmetros, mas retorna apenas o relatório JSON (sem modificar nada).
- *   Útil para revisar o que seria feito antes de aplicar.
- * ──────────────────────────────────────────────────────────────────────────────
+ * Parâmetros opcionais nos endpoints preview/process:
+ *   mappings (JSON string): { "NomeNoExcel": "nomeDoArquivoBan" }
  */
 @RestController
 @RequestMapping("/api/transfer")
@@ -67,74 +59,40 @@ public class TransferController {
         .enable(SerializationFeature.INDENT_OUTPUT);
   }
 
-  // ─── Endpoint principal: processa e retorna ZIP ──────────────────────────────
+  // ─── Analyze: só o Excel ─────────────────────────────────────────────────────
 
-  @PostMapping(
-      value   = "/process",
-      consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
-      produces = "application/zip"
-  )
-  public ResponseEntity<byte[]> process(
-      @RequestPart("transfers")            MultipartFile   transferFile,
-      @RequestPart("bans")                 MultipartFile[] banFiles,
-      @RequestPart(value = "mappings", required = false) String mappingsJson
+  @PostMapping(value = "/analyze",
+               consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+               produces = MediaType.APPLICATION_JSON_VALUE)
+  public ResponseEntity<AnalysisReport> analyze(
+      @RequestPart("transfers") MultipartFile transferFile
   ) {
     try {
-      // 1. Parse Excel/CSV
       List<TransferRecord> records = parser.parse(transferFile);
-      log.info("Arquivo de transferências lido: {} linhas", records.size());
-
-      // 2. Carrega todos os .ban
-      banService.loadAll(banFiles);
-      log.info("Arquivos .ban carregados: {}", banFiles.length);
-
-      // 2b. Aplica mapeamentos manuais (se enviados)
-      if (mappingsJson != null && !mappingsJson.isBlank()) {
-        Map<String, String> mappings = objectMapper.readValue(
-            mappingsJson, new TypeReference<Map<String, String>>() {});
-        banService.loadMappings(mappings);
-        log.info("Mapeamentos manuais carregados: {}", mappings);
-      }
-
-      // 3. Processa transferências
-      TransferReport report = transferService.process(records);
-      logSummary(report);
-
-      // 4. Monta o ZIP de resposta
-      byte[] zip = buildZip(report);
-
-      return ResponseEntity.ok()
-          .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"brasfoot-transfer-result.zip\"")
-          .contentType(MediaType.parseMediaType("application/zip"))
-          .body(zip);
-
+      AnalysisReport report = analysisService.analyze(records);
+      log.info("Analyze: {} linhas, {} transferências, times={}", 
+          records.size(), report.getPlayerTransfersDetected(), report.getTeamsInvolved());
+      return ResponseEntity.ok(report);
     } catch (Exception e) {
-      log.error("Erro no processamento de transferências: {}", e.getMessage(), e);
+      log.error("Erro no analyze: {}", e.getMessage(), e);
       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
     }
   }
 
-  // ─── Preview: só o relatório, sem modificar .ban ────────────────────────────
+  // ─── Preview: simula sem baixar ZIP ──────────────────────────────────────────
 
-  @PostMapping(
-      value    = "/preview",
-      consumes  = MediaType.MULTIPART_FORM_DATA_VALUE,
-      produces  = MediaType.APPLICATION_JSON_VALUE
-  )
+  @PostMapping(value = "/preview",
+               consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+               produces = MediaType.APPLICATION_JSON_VALUE)
   public ResponseEntity<TransferReport> preview(
-      @RequestPart("transfers")            MultipartFile   transferFile,
-      @RequestPart("bans")                 MultipartFile[] banFiles,
-      @RequestPart(value = "mappings", required = false) String mappingsJson
+      @RequestPart("transfers")                              MultipartFile   transferFile,
+      @RequestPart("bans")                                   MultipartFile[] banFiles,
+      @RequestPart(value = "mappings", required = false)     String          mappingsJson
   ) {
     try {
       List<TransferRecord> records = parser.parse(transferFile);
       banService.loadAll(banFiles);
-      if (mappingsJson != null && !mappingsJson.isBlank()) {
-        Map<String, String> mappings = objectMapper.readValue(
-            mappingsJson, new TypeReference<Map<String, String>>() {});
-        banService.loadMappings(mappings);
-        log.info("Mapeamentos manuais (preview): {}", mappings);
-      }
+      applyMappings(mappingsJson);
       TransferReport report = transferService.process(records);
       return ResponseEntity.ok(report);
     } catch (Exception e) {
@@ -143,34 +101,34 @@ public class TransferController {
     }
   }
 
-  // ─── Endpoint de análise prévia: só o Excel, sem .ban ──────────────────────────
+  // ─── Process: aplica e retorna ZIP ───────────────────────────────────────────
 
-  /**
-   * Analisa o arquivo de transferências SEM precisar dos .ban.
-   * Retorna quais times estão envolvidos + prévia de cada linha.
-   * Use isso para saber exatamente quais .ban buscar antes de processar.
-   */
-  @PostMapping(
-      value    = "/analyze",
-      consumes  = MediaType.MULTIPART_FORM_DATA_VALUE,
-      produces  = MediaType.APPLICATION_JSON_VALUE
-  )
-  public ResponseEntity<AnalysisReport> analyze(
-      @RequestPart("transfers") MultipartFile transferFile
+  @PostMapping(value = "/process",
+               consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+               produces = "application/zip")
+  public ResponseEntity<byte[]> process(
+      @RequestPart("transfers")                              MultipartFile   transferFile,
+      @RequestPart("bans")                                   MultipartFile[] banFiles,
+      @RequestPart(value = "mappings", required = false)     String          mappingsJson
   ) {
     try {
       List<TransferRecord> records = parser.parse(transferFile);
-      log.info("Análise prévia: {} linhas lidas", records.size());
-      AnalysisReport report = analysisService.analyze(records);
-      log.info("Times envolvidos: {}", report.getTeamsInvolved());
-      return ResponseEntity.ok(report);
+      banService.loadAll(banFiles);
+      applyMappings(mappingsJson);
+      TransferReport report = transferService.process(records);
+      byte[] zip = buildZip(report);
+      return ResponseEntity.ok()
+          .header(HttpHeaders.CONTENT_DISPOSITION,
+              "attachment; filename=\"brasfoot-transfer-result.zip\"")
+          .contentType(MediaType.parseMediaType("application/zip"))
+          .body(zip);
     } catch (Exception e) {
-      log.error("Erro na análise prévia: {}", e.getMessage(), e);
+      log.error("Erro no process: {}", e.getMessage(), e);
       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
     }
   }
 
-  // ─── Health check ────────────────────────────────────────────────────────────
+  // ─── Health check ─────────────────────────────────────────────────────────────
 
   @GetMapping("/health")
   public ResponseEntity<Map<String, String>> health() {
@@ -181,37 +139,42 @@ public class TransferController {
     ));
   }
 
-  // ─── Montagem do ZIP ─────────────────────────────────────────────────────────
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  private void applyMappings(String mappingsJson) {
+    if (mappingsJson == null || mappingsJson.isBlank()) return;
+    try {
+      Map<String, String> mappings = objectMapper.readValue(
+          mappingsJson, new TypeReference<Map<String, String>>() {});
+      banService.loadMappings(mappings);
+      log.info("Mapeamentos manuais: {}", mappings);
+    } catch (Exception e) {
+      log.warn("Falha ao parsear mappings: {}", e.getMessage());
+    }
+  }
 
   private byte[] buildZip(TransferReport report) throws IOException {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
     try (ZipOutputStream zos = new ZipOutputStream(baos)) {
-
-      // 1. report.json
-      byte[] reportBytes = objectMapper
-          .writerWithDefaultPrettyPrinter()
+      // report.json
+      byte[] reportBytes = objectMapper.writerWithDefaultPrettyPrinter()
           .writeValueAsBytes(buildReportJson(report));
-      addEntry(zos, "report.json", reportBytes);
+      addZipEntry(zos, "report.json", reportBytes);
 
-      // 2. Arquivos .ban modificados
-      Map<String, byte[]> modifiedBans = banService.serializeModified();
-      for (Map.Entry<String, byte[]> entry : modifiedBans.entrySet()) {
-        addEntry(zos, entry.getKey(), entry.getValue());
+      // .ban modificados
+      for (Map.Entry<String, byte[]> entry : banService.serializeModified().entrySet()) {
+        addZipEntry(zos, entry.getKey(), entry.getValue());
       }
     }
-
     return baos.toByteArray();
   }
 
-  private void addEntry(ZipOutputStream zos, String name, byte[] data) throws IOException {
-    ZipEntry entry = new ZipEntry(name);
-    zos.putNextEntry(entry);
+  private void addZipEntry(ZipOutputStream zos, String name, byte[] data) throws IOException {
+    zos.putNextEntry(new ZipEntry(name));
     zos.write(data);
     zos.closeEntry();
   }
 
-  /** Constrói um mapa simplificado para serialização JSON do relatório */
   private Map<String, Object> buildReportJson(TransferReport r) {
     List<Map<String, Object>> items = r.getResults().stream()
         .map(res -> Map.<String, Object>of(
@@ -229,28 +192,18 @@ public class TransferController {
 
     return Map.of(
         "summary", Map.of(
-            "totalRows",        r.getTotalRows(),
-            "successCount",     r.getSuccessCount(),
-            "notFoundCount",    r.getNotFoundCount(),
-            "banMissingCount",  r.getBanMissingCount(),
-            "financialSkipped", r.getFinancialSkipped(),
-            "uncertainSkipped", r.getUncertainSkipped(),
-            "errorCount",       r.getErrorCount(),
-            "modifiedTeams",    r.getModifiedTeams()
+            "totalRows",          r.getTotalRows(),
+            "successCount",       r.getSuccessCount(),
+            "notFoundCount",      r.getNotFoundCount(),
+            "banMissingCount",    r.getBanMissingCount(),
+            "rosterFullCount",    r.getRosterFullCount(),
+            "alreadyTransferred", r.getAlreadyTransferred(),
+            "financialSkipped",   r.getFinancialSkipped(),
+            "uncertainSkipped",   r.getUncertainSkipped(),
+            "errorCount",         r.getErrorCount(),
+            "modifiedTeams",      r.getModifiedTeams()
         ),
         "transfers", items
     );
-  }
-
-  private void logSummary(TransferReport r) {
-    log.info("=== RELATÓRIO DE TRANSFERÊNCIAS ===");
-    log.info("Total linhas:        {}", r.getTotalRows());
-    log.info("Transferidos:        {}", r.getSuccessCount());
-    log.info("Não encontrados:     {}", r.getNotFoundCount());
-    log.info(".ban ausentes:       {}", r.getBanMissingCount());
-    log.info("Financeiros (skip):  {}", r.getFinancialSkipped());
-    log.info("Incertos (skip):     {}", r.getUncertainSkipped());
-    log.info("Erros:               {}", r.getErrorCount());
-    log.info("Times modificados:   {}", r.getModifiedTeams());
   }
 }

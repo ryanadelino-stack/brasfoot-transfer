@@ -1,17 +1,16 @@
 package br.brasfoot.transfer.model;
 
-/**
- * Resultado do processamento de uma transferência individual.
- */
 public class TransferResult {
 
   public enum Status {
-    SUCCESS,          // jogador encontrado e movido com sucesso
-    NOT_FOUND,        // jogador não encontrado no .ban de origem
-    BAN_NOT_PROVIDED, // arquivo .ban do clube origem ou destino não foi enviado
-    SKIPPED_FINANCIAL,// linha identificada como transação financeira, não jogador
-    SKIPPED_UNCERTAIN,// linha ambígua – não foi possível classificar com segurança
-    ERROR             // erro inesperado durante a operação
+    SUCCESS,                      // jogador encontrado e movido com sucesso
+    NOT_FOUND,                    // jogador não encontrado no .ban de origem
+    BAN_NOT_PROVIDED,             // arquivo .ban do clube origem ou destino não foi enviado
+    SKIPPED_FINANCIAL,            // linha identificada como transação financeira
+    SKIPPED_UNCERTAIN,            // linha ambígua — não foi possível classificar
+    SKIPPED_ROSTER_FULL,          // time destino já tem 30 jogadores
+    SKIPPED_PLAYER_TRANSFERRED,   // jogador já saiu deste time OU chegou nesta rodada
+    ERROR                         // erro inesperado durante a operação
   }
 
   private final int    rowIndex;
@@ -21,8 +20,8 @@ public class TransferResult {
   private final String rawMotivo;
   private final Status status;
   private final String message;
-  private final String matchedName; // nome real no .ban (pode diferir do CSV)
-  private final double matchScore;  // similaridade da busca (0.0–1.0)
+  private final String matchedName;
+  private final double matchScore;
 
   private TransferResult(Builder b) {
     this.rowIndex    = b.rowIndex;
@@ -36,7 +35,6 @@ public class TransferResult {
     this.matchScore  = b.matchScore;
   }
 
-  // Getters
   public int    getRowIndex()    { return rowIndex;    }
   public String getPlayerName()  { return playerName;  }
   public String getFromTeam()    { return fromTeam;    }
@@ -46,8 +44,6 @@ public class TransferResult {
   public String getMessage()     { return message;     }
   public String getMatchedName() { return matchedName; }
   public double getMatchScore()  { return matchScore;  }
-
-  // ─── Builder ────────────────────────────────────────────────────────────────
 
   public static Builder builder() { return new Builder(); }
 
@@ -62,15 +58,15 @@ public class TransferResult {
     private String matchedName = "";
     private double matchScore  = 0.0;
 
-    public Builder rowIndex(int v)    { this.rowIndex = v;    return this; }
-    public Builder playerName(String v) { this.playerName = v; return this; }
-    public Builder fromTeam(String v)   { this.fromTeam = v;   return this; }
-    public Builder toTeam(String v)     { this.toTeam = v;     return this; }
-    public Builder rawMotivo(String v)  { this.rawMotivo = v;  return this; }
-    public Builder status(Status v)     { this.status = v;     return this; }
-    public Builder message(String v)    { this.message = v;    return this; }
+    public Builder rowIndex(int v)      { this.rowIndex = v;    return this; }
+    public Builder playerName(String v) { this.playerName = v;  return this; }
+    public Builder fromTeam(String v)   { this.fromTeam = v;    return this; }
+    public Builder toTeam(String v)     { this.toTeam = v;      return this; }
+    public Builder rawMotivo(String v)  { this.rawMotivo = v;   return this; }
+    public Builder status(Status v)     { this.status = v;      return this; }
+    public Builder message(String v)    { this.message = v;     return this; }
     public Builder matchedName(String v){ this.matchedName = v; return this; }
-    public Builder matchScore(double v) { this.matchScore = v; return this; }
+    public Builder matchScore(double v) { this.matchScore = v;  return this; }
     public TransferResult build()       { return new TransferResult(this); }
   }
 }
