@@ -19,22 +19,24 @@ import java.util.List;
 /**
  * Lê arquivos Excel (.xlsx) ou CSV e retorna lista de {@link TransferRecord}.
  *
- * Colunas esperadas (case-insensitive, ordem flexível):
+ * Suporta dois formatos de planilha:
+ *
+ * FORMATO A (antigo – vírgula, EBL original):
  *   Origem (Time) | Destino (Time) | Divisao | Valor (Milhões) | Motivo | Data
+ *
+ * FORMATO B (novo – ponto-e-vírgula, sistema de transações):
+ *   ID | Data/Hora | Time Remetente | Remetente (Nome) | Remetente (E-mail)
+ *   | Time Destinatário | Destinatário (Nome) | Destinatário (E-mail)
+ *   | Valor (R$) | Motivo | Saldo Antes (R$) | Saldo Depois (R$)
+ *
+ * A detecção é automática pelo cabeçalho.
  */
 @Service
 public class ExcelParserService {
 
-  // Índices de coluna padrão (caso não haja cabeçalho reconhecível)
-  private static final int COL_ORIGEM  = 0;
-  private static final int COL_DESTINO = 1;
-  private static final int COL_DIVISAO = 2;
-  private static final int COL_VALOR   = 3;
-  private static final int COL_MOTIVO  = 4;
-  private static final int COL_DATA    = 5;
-
   public List<TransferRecord> parse(MultipartFile file) throws IOException {
-    String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
+    String name = file.getOriginalFilename() == null
+        ? "" : file.getOriginalFilename().toLowerCase();
     if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
       return parseExcel(file);
     } else {
@@ -42,45 +44,42 @@ public class ExcelParserService {
     }
   }
 
-  // ─── Excel ──────────────────────────────────────────────────────────────────
+  // ─── Excel ───────────────────────────────────────────────────────────────────
 
   private List<TransferRecord> parseExcel(MultipartFile file) throws IOException {
     List<TransferRecord> records = new ArrayList<>();
 
     try (Workbook wb = new XSSFWorkbook(file.getInputStream())) {
       Sheet sheet = wb.getSheetAt(0);
-
-      // Descobre índices de coluna lendo o cabeçalho (primeira linha não-vazia)
-      int[] colIdx = detectColumns(sheet);
+      int[] colIdx = detectExcelColumns(sheet);
 
       boolean firstRow = true;
       for (Row row : sheet) {
         if (row == null) continue;
-        if (firstRow) { firstRow = false; continue; } // pula cabeçalho
+        if (firstRow) { firstRow = false; continue; }
 
         String origem  = cellStr(row, colIdx[0]);
         String destino = cellStr(row, colIdx[1]);
-        String divisao = cellStr(row, colIdx[2]);
-        String valor   = cellStr(row, colIdx[3]);
-        String motivo  = cellStr(row, colIdx[4]);
-        String data    = cellStr(row, colIdx[5]);
+        String motivo  = cellStr(row, colIdx[2]);
+        String valor   = colIdx[3] >= 0 ? cellStr(row, colIdx[3]) : "";
+        String data    = colIdx[4] >= 0 ? cellStr(row, colIdx[4]) : "";
 
-        // Ignora linhas completamente vazias
         if (origem.isBlank() && destino.isBlank() && motivo.isBlank()) continue;
-
         records.add(new TransferRecord(row.getRowNum() + 1,
-            origem, destino, divisao, valor, motivo, data));
+            origem, destino, "", valor, motivo, data));
       }
     }
     return records;
   }
 
   /**
-   * Tenta detectar a posição de cada coluna pelo cabeçalho.
-   * Se falhar, usa a ordem padrão.
+   * Detecta as colunas pelo cabeçalho.
+   * Retorna int[5]: [origemIdx, destinoIdx, motivoIdx, valorIdx, dataIdx]
+   * Suporta ambos os formatos de planilha.
    */
-  private int[] detectColumns(Sheet sheet) {
-    int[] idx = {COL_ORIGEM, COL_DESTINO, COL_DIVISAO, COL_VALOR, COL_MOTIVO, COL_DATA};
+  private int[] detectExcelColumns(Sheet sheet) {
+    // Padrão seguro para o Formato A
+    int[] idx = {0, 1, 4, 3, 5};
 
     Row header = sheet.getRow(0);
     if (header == null) return idx;
@@ -88,14 +87,149 @@ public class ExcelParserService {
     for (Cell cell : header) {
       String h = cellStr(cell).toLowerCase().strip();
       int c = cell.getColumnIndex();
-      if (h.contains("origem"))  idx[0] = c;
-      if (h.contains("destino")) idx[1] = c;
-      if (h.contains("divis"))   idx[2] = c;
-      if (h.contains("valor"))   idx[3] = c;
-      if (h.contains("motivo"))  idx[4] = c;
-      if (h.contains("data"))    idx[5] = c;
+
+      // Formato A
+      if (h.contains("origem"))    idx[0] = c;
+      if (h.contains("destino"))   idx[1] = c;
+      if (h.contains("motivo"))    idx[2] = c;
+      if (h.contains("valor"))     idx[3] = c;
+      if (h.contains("data") && !h.contains("hora")) idx[4] = c;
+
+      // Formato B
+      if (h.equals("time remetente") || h.contains("remetente") && h.contains("time")) idx[0] = c;
+      if (h.equals("time destinatário") || h.equals("time destinatario")
+          || (h.contains("destinat") && h.contains("time")))                           idx[1] = c;
     }
     return idx;
+  }
+
+  // ─── CSV ─────────────────────────────────────────────────────────────────────
+
+  private List<TransferRecord> parseCsv(MultipartFile file) throws IOException {
+    // Lê o conteúdo completo para detectar o separador
+    byte[] bytes = file.getInputStream().readAllBytes();
+    String raw = new String(bytes, StandardCharsets.UTF_8)
+        .replace("\uFEFF", ""); // Remove BOM
+
+    // Detecta separador: se a primeira linha tem mais ";" do que ","
+    String firstLine = raw.lines().findFirst().orElse("");
+    char delimiter = firstLine.chars().filter(c -> c == ';').count()
+        > firstLine.chars().filter(c -> c == ',').count() ? ';' : ',';
+
+    if (delimiter == ';') {
+      return parseCsvFormatoB(raw, delimiter);
+    } else {
+      return parseCsvFormatoA(raw, delimiter);
+    }
+  }
+
+  /**
+   * FORMATO A — vírgula, cabeçalho: "Origem (Time)", "Destino (Time)", "Motivo"
+   */
+  private List<TransferRecord> parseCsvFormatoA(String raw, char delimiter) throws IOException {
+    List<TransferRecord> records = new ArrayList<>();
+
+    try (Reader reader = new java.io.StringReader(raw);
+         CSVParser parser = CSVFormat.DEFAULT.builder()
+             .setDelimiter(delimiter)
+             .setHeader()
+             .setSkipHeaderRecord(true)
+             .setIgnoreHeaderCase(true)
+             .setTrim(true)
+             .build()
+             .parse(reader)) {
+
+      int rowNum = 2;
+      for (CSVRecord r : parser) {
+        String origem  = safeGet(r, "origem (time)", "origem");
+        String destino = safeGet(r, "destino (time)", "destino");
+        String motivo  = safeGet(r, "motivo");
+        String valor   = safeGet(r, "valor (milhões)", "valor");
+        String data    = safeGet(r, "data");
+
+        if (origem.isBlank() && destino.isBlank() && motivo.isBlank()) { rowNum++; continue; }
+        records.add(new TransferRecord(rowNum++, origem, destino, "", valor, motivo, data));
+      }
+    }
+    return records;
+  }
+
+  /**
+   * FORMATO B — ponto-e-vírgula, cabeçalho:
+   *   ID | Data/Hora | Time Remetente | ... | Time Destinatário | ... | Motivo | ...
+   *
+   * Mapeamento fixo + fallback por nome de cabeçalho:
+   *   C (idx 2) = Time Remetente  → origem
+   *   F (idx 5) = Time Destinatário → destino
+   *   J (idx 9) = Motivo
+   */
+  private List<TransferRecord> parseCsvFormatoB(String raw, char delimiter) throws IOException {
+    List<TransferRecord> records = new ArrayList<>();
+
+    try (Reader reader = new java.io.StringReader(raw);
+         CSVParser parser = CSVFormat.DEFAULT.builder()
+             .setDelimiter(delimiter)
+             .setHeader()
+             .setSkipHeaderRecord(true)
+             .setIgnoreHeaderCase(true)
+             .setTrim(true)
+             .setQuote('"')
+             .build()
+             .parse(reader)) {
+
+      // Descobre os índices pelo cabeçalho (case-insensitive)
+      // com fallback nos índices posicionais do Formato B
+      java.util.Map<String, Integer> headerMap = parser.getHeaderMap();
+      int origemIdx  = resolveIdx(headerMap, 2,  "time remetente", "remetente");
+      int destinoIdx = resolveIdx(headerMap, 5,  "time destinatário", "time destinatario", "destinatário", "destinatario");
+      int motivoIdx  = resolveIdx(headerMap, 9,  "motivo");
+      int valorIdx   = resolveIdx(headerMap, 8,  "valor (r$)", "valor");
+      int dataIdx    = resolveIdx(headerMap, 1,  "data/hora", "data");
+
+      int rowNum = 2;
+      for (CSVRecord r : parser) {
+        String origem  = safeGetByIdx(r, origemIdx);
+        String destino = safeGetByIdx(r, destinoIdx);
+        String motivo  = safeGetByIdx(r, motivoIdx);
+        String valor   = safeGetByIdx(r, valorIdx);
+        String data    = safeGetByIdx(r, dataIdx);
+
+        if (origem.isBlank() && destino.isBlank() && motivo.isBlank()) { rowNum++; continue; }
+        records.add(new TransferRecord(rowNum++, origem, destino, "", valor, motivo, data));
+      }
+    }
+    return records;
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  private int resolveIdx(java.util.Map<String, Integer> headerMap,
+                          int defaultIdx, String... candidates) {
+    if (headerMap == null) return defaultIdx;
+    for (String key : candidates) {
+      for (java.util.Map.Entry<String, Integer> entry : headerMap.entrySet()) {
+        if (entry.getKey().toLowerCase().strip().equals(key.toLowerCase())) {
+          return entry.getValue();
+        }
+      }
+    }
+    return defaultIdx;
+  }
+
+  private String safeGetByIdx(CSVRecord r, int idx) {
+    try {
+      if (idx < 0 || idx >= r.size()) return "";
+      String v = r.get(idx);
+      return v == null ? "" : v.strip();
+    } catch (Exception e) { return ""; }
+  }
+
+  private String safeGet(CSVRecord r, String... keys) {
+    for (String k : keys) {
+      try { String v = r.get(k); if (v != null) return v.strip(); }
+      catch (Exception ignored) {}
+    }
+    return "";
   }
 
   private String cellStr(Row row, int col) {
@@ -121,43 +255,5 @@ public class ExcelParserService {
       }
       default -> "";
     };
-  }
-
-  // ─── CSV ────────────────────────────────────────────────────────────────────
-
-  private List<TransferRecord> parseCsv(MultipartFile file) throws IOException {
-    List<TransferRecord> records = new ArrayList<>();
-
-    try (Reader reader = new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8);
-         CSVParser parser = CSVFormat.DEFAULT.builder()
-             .setHeader()
-             .setSkipHeaderRecord(true)
-             .setIgnoreHeaderCase(true)
-             .setTrim(true)
-             .build()
-             .parse(reader)) {
-
-      int row = 2;
-      for (CSVRecord r : parser) {
-        String origem  = safeGet(r, "origem (time)", "origem");
-        String destino = safeGet(r, "destino (time)", "destino");
-        String divisao = safeGet(r, "divisao", "divisão");
-        String valor   = safeGet(r, "valor (milhões)", "valor");
-        String motivo  = safeGet(r, "motivo");
-        String data    = safeGet(r, "data");
-
-        if (origem.isBlank() && destino.isBlank() && motivo.isBlank()) { row++; continue; }
-        records.add(new TransferRecord(row++, origem, destino, divisao, valor, motivo, data));
-      }
-    }
-    return records;
-  }
-
-  private String safeGet(CSVRecord r, String... keys) {
-    for (String k : keys) {
-      try { String v = r.get(k); if (v != null) return v; }
-      catch (Exception ignored) {}
-    }
-    return "";
   }
 }

@@ -42,7 +42,11 @@ public class TransferClassifierService {
       "premiacoes", "premiacao", "pix errado", "mandou errado",
       "piloto", "funcao coordenacao", "funcao dep organiz",
       "diferenca", "restante", "sudeste", "nordeste",
-      "volta do dinheiro", "pk"
+      "volta do dinheiro", "pk",
+      // Formato B
+      "bonus", "tribunal", "mkt", "mod", "modo player",
+      "estadual", "campeao", "artilheiro", "se vira",
+      "video yt", "ebl bet pagou errado", "testando2", "testando"
   );
 
   private static final Set<String> FINANCIAL_PREFIXES = Set.of(
@@ -60,7 +64,13 @@ public class TransferClassifierService {
       "primeiro cop", "vice cop", "terceiro cop", "quarto cop",
       "por copa", "por star", "star ",
       "estrela ",
-      "compra de milhoes", "ajuda no modo"
+      "compra de milhoes", "ajuda no modo",
+      // Formato B
+      "pagamento ", "pagamento-", "premiacoes individ",
+      "salario sav", "salario savs", "50m salario",
+      "mod bahia", "mod modo player", "mod copa",
+      "campeao bahia", "vice bahia",
+      "restante mod", "por mod champions"
   );
 
   private static final Set<String> FINANCIAL_CONTAINS = Set.of(
@@ -94,7 +104,10 @@ public class TransferClassifierService {
       "cancelada", "ciente", "anjos", "restante", "excluir",
       "acordo", "acerto", "diferenca", "sudeste", "nordeste",
       "volta", "dinheiro", "ajuda", "matismo", "saf", "real matismo",
-      "pk", "emprestado", "0000000restante", "star"
+      "pk", "emprestado", "0000000restante", "star", "testando",
+      // Formato B
+      "bonus", "tribunal", "mkt", "mod", "estadual", "campeao",
+      "artilheiro", "testando2", "video", "yt", "jogador"
   );
 
   // ─── PALAVRAS DE POSICAO (para remover do entorno do nome) ──────────────────
