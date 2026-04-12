@@ -199,6 +199,7 @@ public class TransferController {
     summary.put("rosterFullCount",    r.getRosterFullCount());
     summary.put("alreadyTransferred", r.getAlreadyTransferred());
     summary.put("missingTeamCount",   r.getMissingTeamCount());
+    summary.put("dismissedCount",     r.getDismissedCount());
     summary.put("financialSkipped",   r.getFinancialSkipped());
     summary.put("uncertainSkipped",   r.getUncertainSkipped());
     summary.put("errorCount",         r.getErrorCount());

@@ -104,7 +104,6 @@ public class TransferClassifierService {
       "campeao bahia", "vice bahia",
       "restante mod", "por mod champions",
       // Padrões novos desta planilha
-      "remover ",         // "remover saldanha" → remover do elenco, não é transferência
       "por estrela",      // "por estrela" → pagamento por estrela, não jogador
       "caridade ",        // "caridade empréstimos..."
       "verificar ",       // "verificar savs"
@@ -279,6 +278,30 @@ public class TransferClassifierService {
           record.getOrigem(), record.getDestino(), computeConfidence(norm, name)));
     }
     return transfers;
+  }
+
+  // ─── DETECÇÃO DE DISPENSA ────────────────────────────────────────────────────────
+
+  // Padrões que indicam dispensa/remoção de jogador do elenco (sem transferência)
+  private static final List<String> DISMISSAL_PREFIXES = List.of(
+      "remover ", "excluir ", "dispensar ", "retirar ", "deletar "
+  );
+
+  /**
+   * Detecta se o motivo é uma dispensa de jogador (sem transferência para outro time).
+   * Ex: "remover saldanha", "excluir João"
+   * Retorna o nome do jogador a ser dispensado, ou null se não for dispensa.
+   */
+  public String extractDismissedPlayerName(String motivo) {
+    if (motivo == null || motivo.isBlank()) return null;
+    String lower = motivo.strip().toLowerCase();
+    for (String prefix : DISMISSAL_PREFIXES) {
+      if (lower.startsWith(prefix)) {
+        String rest = motivo.strip().substring(prefix.length()).strip();
+        if (!rest.isBlank() && rest.length() >= 2) return rest.toUpperCase();
+      }
+    }
+    return null;
   }
 
   // ─── DETECÇÃO FINANCEIRA ──────────────────────────────────────────────────────

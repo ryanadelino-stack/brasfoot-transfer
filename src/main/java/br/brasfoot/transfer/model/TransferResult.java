@@ -11,6 +11,7 @@ public class TransferResult {
     SKIPPED_ROSTER_FULL,          // time destino já tem 30 jogadores
     SKIPPED_PLAYER_TRANSFERRED,   // jogador já saiu deste time OU chegou nesta rodada
     SKIPPED_MISSING_TEAM,         // origem ou destino está em branco — impossível processar
+    DISMISSED,                    // jogador dispensado/removido do elenco (sem transferência)
     ERROR                         // erro inesperado durante a operação
   }
 
