@@ -208,9 +208,9 @@ public class TransferClassifierService {
 
   // ─── PADRÕES REGEX ───────────────────────────────────────────────────────────
 
-  // "VEM PARA O/PRO/PRA [CLUBE]" — remove o destino do texto
+  // "VEM PARA O/PRO/PRA [CLUBE]" ou "VEM DO CLUBE PARA O CLUBE2" — remove info de clube
   private static final Pattern VEM_PARA_CLUBE = Pattern.compile(
-      "\\s+vem\\s+(para\\s+o|para\\s+a|para|pro|pra)\\s+[\\w\\s\\-]+$",
+      "\\s+vem\\s+(?:do?\\s+[\\w\\s\\-]+\\s+)?(?:para\\s+[ao]|para\\s+a|para|pro|pra)\\s+[\\w\\s\\-]+$",
       Pattern.CASE_INSENSITIVE);
 
   // "MOTIVO: X"
@@ -222,7 +222,7 @@ public class TransferClassifierService {
 
   // "COMPRA DO/DOS/DE/PELO/PELA JOGADOR? NOME" (e typo "CONPRA")
   private static final Pattern COMPRA_PREFIX = Pattern.compile(
-      "^(?:con?pra)\\s+(?:d[oaes]{1,2}|pelo|pela|de)\\s+(?:jogador[a-z:]*\\s+)?",
+      "^(?:compra|con?pra)\\s+(?:d[oaes]{1,2}|pelo|pela|de)\\s+(?:jogador[a-z:]*\\s+)?",
       Pattern.CASE_INSENSITIVE);
 
   // Texto longo após extração de "COMPRA DO jogador NOME": remove " do CLUBE" / " da junto a..."
@@ -362,12 +362,13 @@ public class TransferClassifierService {
     }
 
     // 4. "VOL : NOME" ou "ZAG : NOME"
-    Matcher mPosCln = POSICAO_COLON.matcher(norm);
+    // Aplica no string ORIGINAL pois a normalização remove o caractere ':'
+    Matcher mPosCln = POSICAO_COLON.matcher(original.strip());
     if (mPosCln.find()) {
       String abbrev = mPosCln.group(1).toLowerCase();
       boolean isPos = POSITION_ABBREVS.stream().anyMatch(p -> p.equals(abbrev));
       if (isPos) {
-        String rest = norm.substring(mPosCln.end()).strip();
+        String rest = StringNormalizer.normalize(original.strip().substring(mPosCln.end()));
         rest = stripPositionWords(rest);
         tryAddName(names, rest.toUpperCase());
         return names;
@@ -375,6 +376,17 @@ public class TransferClassifierService {
     }
 
     // 5. "NOME do CLUBE vem para o CLUBE2"
+    // Tenta no original PRIMEIRO (preserva acentos e "do"/"da" sem ambiguidade)
+    Matcher mNomeDoOrig = NOME_DO_CLUBE_VEM.matcher(original.strip());
+    if (mNomeDoOrig.find()) {
+      String candidate = StringNormalizer.normalize(mNomeDoOrig.group(1).strip());
+      candidate = stripPositionWords(candidate);
+      if (!candidate.isBlank() && !isFinancial(candidate)) {
+        tryAddName(names, candidate.toUpperCase());
+        return names;
+      }
+    }
+    // Tenta também na string normalizada (fallback)
     Matcher mNomeDo = NOME_DO_CLUBE_VEM.matcher(norm);
     if (mNomeDo.find()) {
       String candidate = mNomeDo.group(1).strip();
@@ -386,14 +398,32 @@ public class TransferClassifierService {
     }
 
     // 6. "NOME - CLUBE vem para o CLUBE2"
-    if (norm.contains("-") && norm.contains("vem")) {
-      Matcher mHifen = NOME_HIFEN_CLUBE_VEM.matcher(norm);
+    // Aplica no string ORIGINAL pois a normalização remove o caractere '-'
+    if (original.contains("-") && (norm.contains("vem") || original.toLowerCase().contains("vem"))) {
+      Matcher mHifen = NOME_HIFEN_CLUBE_VEM.matcher(original.strip());
       if (mHifen.find()) {
-        String candidate = mHifen.group(1).strip();
+        String candidate = StringNormalizer.normalize(mHifen.group(1).strip());
         candidate = stripPositionWords(candidate);
-        if (!candidate.isBlank() && !isFinancial(StringNormalizer.normalize(candidate))) {
+        if (!candidate.isBlank() && !isFinancial(candidate)) {
           tryAddName(names, candidate.toUpperCase());
           return names;
+        }
+      }
+    }
+
+    // 6b. "SIGLA/CLUBE - NOME" (sem vem) — strip prefixo de sigla
+    // Ex: "CRB - Giovanni (Meia Esquerda)" → "Giovanni" (parens já removidos anteriormente)
+    if (original.contains(" - ") && !norm.contains("vem")) {
+      java.util.regex.Matcher mSigla = java.util.regex.Pattern
+          .compile("^[A-Z0-9 ]{1,10}\\s*-\\s*(.+)$")
+          .matcher(original.strip());
+      if (mSigla.find()) {
+        String candidate = StringNormalizer.normalize(mSigla.group(1).strip());
+        // Remove posição no final se houver
+        candidate = stripPositionWords(candidate);
+        if (candidate.length() >= 3 && !isFinancial(candidate) && !NAME_BLACKLIST.contains(candidate)) {
+          tryAddName(names, candidate.toUpperCase());
+          if (!names.isEmpty()) return names;
         }
       }
     }

@@ -210,7 +210,9 @@ public class BanTransferService {
 
     String playerNorm = StringNormalizer.normalize(pt.playerName);
 
-    if (transferredThisSession.contains(playerNorm)) {
+    String fromKey0d    = banService.resolveTeamKey(pt.fromTeam);
+    String blockingKeyD = playerNorm + "|" + (fromKey0d != null ? fromKey0d : pt.fromTeam);
+    if (transferredThisSession.contains(blockingKeyD)) {
       return b.status(TransferResult.Status.SKIPPED_PLAYER_TRANSFERRED)
               .message("Jogador '" + pt.playerName + "' já foi envolvido nesta rodada.")
               .build();
@@ -239,7 +241,8 @@ public class BanTransferService {
 
       String fromKey = banService.resolveTeamKey(pt.fromTeam);
       if (fromKey != null) rosterSize.merge(fromKey, -1, Integer::sum);
-      transferredThisSession.add(playerNorm);
+      String fromKeyD2 = banService.resolveTeamKey(pt.fromTeam);
+      transferredThisSession.add(playerNorm + "|" + (fromKeyD2 != null ? fromKeyD2 : pt.fromTeam));
 
       log.info("Row {}: '{}' DISPENSADO de '{}' (match='{}')",
           pt.record.getRowIndex(), pt.playerName, pt.fromTeam, match.matchedName());
@@ -272,11 +275,14 @@ public class BanTransferService {
     String playerNorm = StringNormalizer.normalize(pt.playerName);
     String toKey      = banService.resolveTeamKey(pt.toTeam);
 
-    // REGRA 2: jogador já envolvido nesta rodada
-    if (transferredThisSession.contains(playerNorm)) {
+    // REGRA 2: mesmo jogador do mesmo time de origem já transferido nesta rodada.
+    // Chave: playerNorm|fromTeamKey — permite homônimos em clubes diferentes.
+    String fromKey0    = banService.resolveTeamKey(pt.fromTeam);
+    String blockingKey = playerNorm + "|" + (fromKey0 != null ? fromKey0 : pt.fromTeam);
+    if (transferredThisSession.contains(blockingKey)) {
       return b.status(TransferResult.Status.SKIPPED_PLAYER_TRANSFERRED)
-              .message("Jogador '" + pt.playerName + "' já participou de uma transferência "
-                  + "nesta planilha e não pode ser negociado novamente na mesma rodada.")
+              .message("Transferência duplicada: '" + pt.playerName + "' já foi transferido "
+                  + "desta equipe nesta planilha.")
               .build();
     }
 
@@ -335,7 +341,8 @@ public class BanTransferService {
       String fromKey = banService.resolveTeamKey(pt.fromTeam);
       if (fromKey != null) rosterSize.merge(fromKey, -1, Integer::sum);
       if (toKey   != null) rosterSize.merge(toKey,    1, Integer::sum);
-      transferredThisSession.add(playerNorm);
+      String fromKeyAdd = banService.resolveTeamKey(pt.fromTeam);
+      transferredThisSession.add(playerNorm + "|" + (fromKeyAdd != null ? fromKeyAdd : pt.fromTeam));
 
       log.info("Row {}: '{}' {} → {} match='{}' {}%",
           pt.record.getRowIndex(), pt.playerName, pt.fromTeam, pt.toTeam,
