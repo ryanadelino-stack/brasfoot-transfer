@@ -198,6 +198,7 @@ public class TransferController {
             "banMissingCount",    r.getBanMissingCount(),
             "rosterFullCount",    r.getRosterFullCount(),
             "alreadyTransferred", r.getAlreadyTransferred(),
+            "missingTeamCount",   r.getMissingTeamCount(),
             "financialSkipped",   r.getFinancialSkipped(),
             "uncertainSkipped",   r.getUncertainSkipped(),
             "errorCount",         r.getErrorCount(),

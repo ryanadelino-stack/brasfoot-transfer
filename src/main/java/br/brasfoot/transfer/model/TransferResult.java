@@ -10,6 +10,7 @@ public class TransferResult {
     SKIPPED_UNCERTAIN,            // linha ambígua — não foi possível classificar
     SKIPPED_ROSTER_FULL,          // time destino já tem 30 jogadores
     SKIPPED_PLAYER_TRANSFERRED,   // jogador já saiu deste time OU chegou nesta rodada
+    SKIPPED_MISSING_TEAM,         // origem ou destino está em branco — impossível processar
     ERROR                         // erro inesperado durante a operação
   }
 

@@ -14,12 +14,14 @@ public class TransferReport {
   private final int                  errorCount;
   private final int                  rosterFullCount;       // bloqueados: elenco cheio
   private final int                  alreadyTransferred;    // bloqueados: dupla venda ou recém-chegado
+  private final int                  missingTeamCount;      // ignorados: origem ou destino em branco
   private final List<TransferResult> results;
   private final Set<String>          modifiedTeams;
 
   public TransferReport(int totalRows, int financialSkipped, int uncertainSkipped,
                         int successCount, int notFoundCount, int banMissingCount,
                         int errorCount, int rosterFullCount, int alreadyTransferred,
+                        int missingTeamCount,
                         List<TransferResult> results, Set<String> modifiedTeams) {
     this.totalRows          = totalRows;
     this.financialSkipped   = financialSkipped;
@@ -30,6 +32,7 @@ public class TransferReport {
     this.errorCount         = errorCount;
     this.rosterFullCount    = rosterFullCount;
     this.alreadyTransferred = alreadyTransferred;
+    this.missingTeamCount   = missingTeamCount;
     this.results            = results;
     this.modifiedTeams      = modifiedTeams;
   }
@@ -43,6 +46,7 @@ public class TransferReport {
   public int                  getErrorCount()         { return errorCount;         }
   public int                  getRosterFullCount()    { return rosterFullCount;    }
   public int                  getAlreadyTransferred() { return alreadyTransferred; }
+  public int                  getMissingTeamCount()   { return missingTeamCount;   }
   public List<TransferResult> getResults()            { return results;            }
   public Set<String>          getModifiedTeams()      { return modifiedTeams;      }
 }
