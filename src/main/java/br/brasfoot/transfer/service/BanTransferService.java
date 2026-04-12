@@ -9,27 +9,26 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 
 /**
- * Orquestra o processo completo de transferência com 3 regras de negócio:
+ * Orquestra o processo completo de transferência.
  *
- *  REGRA 0 — Time vazio (SKIPPED_MISSING_TEAM)
- *    Se origem OU destino estiver em branco, a transferência não pode acontecer.
+ * SOBRE A DIREÇÃO DAS TRANSFERÊNCIAS:
+ *   A planilha pode ter dois formatos de direção:
  *
- *  REGRA 1 — Limite de 30 jogadores (rígido)
- *    O time destino nunca pode ultrapassar 30 atletas no momento da transferência.
+ *   Formato A (antigo): Remetente = VENDEDOR, Destinatário = COMPRADOR
+ *     → jogador está no REMETENTE e vai para o DESTINATÁRIO
  *
- *  REGRA 2 — Jogador já envolvido nesta rodada (anti-dupla-venda + anti-revenda)
- *    Se um jogador participou de qualquer transferência bem-sucedida nesta planilha
- *    (saiu OU chegou), ele está bloqueado para o resto da rodada.
- *    Isso cobre dois casos:
- *      a) Dupla venda: o Flamengo tenta vender Pedro para dois times diferentes.
- *      b) Revenda imediata: o Palmeiras comprou Pedro e tenta revendê-lo na mesma rodada.
+ *   Formato B (novo): Remetente = COMPRADOR (paga), Destinatário = VENDEDOR (recebe)
+ *     → jogador está no DESTINATÁRIO e vai para o REMETENTE
  *
- *  NOTA IMPORTANTE sobre buildRosterSizeMap:
- *    Usamos apenas os .ban fornecidos para calcular tamanho de elenco.
- *    NÃO pré-populamos um mapa de "onde está cada jogador" a partir dos .ban,
- *    pois isso causaria falsos positivos quando jogadores aparecem em múltiplos
- *    arquivos .ban ou quando o .ban reflete um estado diferente da planilha.
- *    Quem decide se o jogador pode sair de um time é o matcher (NOT_FOUND se não achar).
+ *   Como não é possível saber o formato de cada linha, o sistema tenta os dois:
+ *   1. Busca o jogador no REMETENTE → se encontrar, transfere para o DESTINATÁRIO
+ *   2. Se não encontrar, busca no DESTINATÁRIO → se encontrar, transfere para o REMETENTE
+ *      (direção invertida — reportado no resultado)
+ *
+ * REGRAS DE NEGÓCIO:
+ *   REGRA 0 — Time vazio: origem ou destino em branco → ignorado
+ *   REGRA 1 — Limite de 30 jogadores por time (rígido)
+ *   REGRA 2 — Jogador já envolvido nesta rodada não pode ser transferido de novo
  */
 @Service
 public class BanTransferService {
@@ -53,13 +52,8 @@ public class BanTransferService {
     List<TransferResult> results = new ArrayList<>();
     List<PendingTransfer> pending = buildPendingList(records, results);
 
-    // rosterSize: teamKey → quantidade atual de jogadores (atualizada dinamicamente)
-    Map<String, Integer> rosterSize = buildRosterSizeMap();
-
-    // transferredThisSession: nomes normalizados de jogadores que já participaram
-    // de qualquer transferência BEM-SUCEDIDA nesta rodada (saída OU chegada).
-    // Evita tanto dupla-venda quanto revenda imediata.
-    Set<String> transferredThisSession = new HashSet<>();
+    Map<String, Integer> rosterSize           = buildRosterSizeMap();
+    Set<String>          transferredThisSession = new HashSet<>();
 
     int successCount     = 0;
     int notFoundCount    = 0;
@@ -118,12 +112,10 @@ public class BanTransferService {
       boolean fromBlank = record.getOrigem().isBlank();
       boolean toBlank   = record.getDestino().isBlank();
 
-      // REGRA 0: time vazio — verificar antes de classificar
       if (fromBlank || toBlank) {
         String norm = StringNormalizer.normalize(record.getMotivo());
         TransferResult.Status status;
         String msg;
-
         if (classifier.isFinancial(norm) || norm.isBlank()) {
           status = TransferResult.Status.SKIPPED_FINANCIAL;
           msg    = "Transação financeira — ignorada.";
@@ -131,21 +123,17 @@ public class BanTransferService {
           String missing = fromBlank && toBlank ? "origem e destino"
               : fromBlank ? "origem" : "destino";
           status = TransferResult.Status.SKIPPED_MISSING_TEAM;
-          msg    = "Campo '" + missing + "' está em branco. Impossível processar sem ambos os times.";
+          msg    = "Campo '" + missing + "' está em branco. Impossível processar.";
         }
-
         preResults.add(TransferResult.builder()
             .rowIndex(record.getRowIndex())
             .fromTeam(record.getOrigem())
             .toTeam(record.getDestino())
             .rawMotivo(record.getMotivo())
-            .status(status)
-            .message(msg)
-            .build());
+            .status(status).message(msg).build());
         continue;
       }
 
-      // Classifica normalmente
       String norm = StringNormalizer.normalize(record.getMotivo());
       List<PlayerTransfer> detected = classifier.classify(record);
 
@@ -176,7 +164,7 @@ public class BanTransferService {
     return list;
   }
 
-  // ─── Execução de uma transferência individual ────────────────────────────────
+  // ─── Execução principal ──────────────────────────────────────────────────────
 
   private TransferResult executeTransfer(PendingTransfer pt,
                                           Map<String, Integer> rosterSize,
@@ -189,104 +177,166 @@ public class BanTransferService {
         .rawMotivo(pt.record.getMotivo());
 
     String playerNorm = StringNormalizer.normalize(pt.playerName);
-    String toKey      = banService.resolveTeamKey(pt.toTeam);
 
-    // REGRA 2: jogador já envolvido em transferência nesta rodada
+    // REGRA 2: jogador já envolvido nesta rodada
     if (transferredThisSession.contains(playerNorm)) {
-      log.warn("Row {}: '{}' já foi transferido nesta rodada",
+      log.warn("Row {}: '{}' já envolvido nesta rodada",
           pt.record.getRowIndex(), pt.playerName);
       return b.status(TransferResult.Status.SKIPPED_PLAYER_TRANSFERRED)
               .message("Jogador '" + pt.playerName + "' já participou de uma transferência "
-                  + "nesta planilha (saída ou chegada) e não pode ser negociado novamente "
-                  + "na mesma rodada.")
+                  + "nesta planilha e não pode ser negociado novamente na mesma rodada.")
               .build();
     }
 
-    // REGRA 1: limite rígido de 30 jogadores
-    if (toKey != null) {
-      int currentSize = rosterSize.getOrDefault(toKey, 0);
-      if (currentSize >= MAX_ROSTER) {
-        log.warn("Row {}: '{}' com {} jogadores — limite atingido",
-            pt.record.getRowIndex(), pt.toTeam, currentSize);
-        return b.status(TransferResult.Status.SKIPPED_ROSTER_FULL)
-                .message(String.format(
-                    "Time '%s' já tem %d jogadores (limite: %d). "
-                        + "O time precisa vender um jogador antes de contratar.",
-                    pt.toTeam, currentSize, MAX_ROSTER))
-                .build();
+    // Tenta direção normal: fromTeam → toTeam
+    TransferResult normalResult = tryTransfer(
+        pt, pt.fromTeam, pt.toTeam, false, rosterSize, transferredThisSession);
+
+    if (normalResult.getStatus() == TransferResult.Status.SUCCESS) return normalResult;
+
+    // Se não encontrou no fromTeam (remetente), tenta direção inversa: toTeam → fromTeam
+    // Isso cobre o caso onde o remetente é o COMPRADOR e o jogador está no destinatário
+    if (normalResult.getStatus() == TransferResult.Status.NOT_FOUND
+        || normalResult.getStatus() == TransferResult.Status.BAN_NOT_PROVIDED) {
+
+      TransferResult invertedResult = tryTransfer(
+          pt, pt.toTeam, pt.fromTeam, true, rosterSize, transferredThisSession);
+
+      // Só aceita a direção invertida se encontrou o jogador
+      if (invertedResult.getStatus() == TransferResult.Status.SUCCESS
+          || invertedResult.getStatus() == TransferResult.Status.SKIPPED_ROSTER_FULL) {
+        log.info("Row {}: '{}' — direção invertida (jogador estava no destinatário)",
+            pt.record.getRowIndex(), pt.playerName);
+        return invertedResult;
       }
     }
 
-    // Verificação de .ban disponível
-    if (!banService.hasBan(pt.fromTeam)) {
-      return b.status(TransferResult.Status.BAN_NOT_PROVIDED)
-              .message("Arquivo .ban do clube de origem '" + pt.fromTeam + "' não foi enviado.")
-              .build();
-    }
-    if (!banService.hasBan(pt.toTeam)) {
-      return b.status(TransferResult.Status.BAN_NOT_PROVIDED)
-              .message("Arquivo .ban do clube de destino '" + pt.toTeam + "' não foi enviado.")
-              .build();
+    // Nenhuma das direções funcionou — retorna o resultado da tentativa normal
+    return normalResult;
+  }
+
+  // ─── Tenta executar uma transferência em uma direção específica ──────────────
+
+  /**
+   * Tenta transferir o jogador de {@code fromTeam} para {@code toTeam}.
+   *
+   * @param inverted  true = direção invertida (documenta no resultado)
+   */
+  private TransferResult tryTransfer(PendingTransfer pt,
+                                      String fromTeam, String toTeam,
+                                      boolean inverted,
+                                      Map<String, Integer> rosterSize,
+                                      Set<String> transferredThisSession) {
+    String playerNorm = StringNormalizer.normalize(pt.playerName);
+    String toKey = banService.resolveTeamKey(toTeam);
+
+    // REGRA 1: limite de 30 jogadores no destino
+    if (toKey != null) {
+      int currentSize = rosterSize.getOrDefault(toKey, 0);
+      if (currentSize >= MAX_ROSTER) {
+        return TransferResult.builder()
+            .rowIndex(pt.record.getRowIndex())
+            .playerName(pt.playerName)
+            .fromTeam(fromTeam).toTeam(toTeam)
+            .rawMotivo(pt.record.getMotivo())
+            .status(TransferResult.Status.SKIPPED_ROSTER_FULL)
+            .message(String.format(
+                "Time '%s' já tem %d jogadores (limite: %d). Precisa vender antes de contratar.",
+                toTeam, currentSize, MAX_ROSTER))
+            .build();
+      }
     }
 
-    // Busca e move o jogador
+    // Verifica disponibilidade dos .ban
+    if (!banService.hasBan(fromTeam)) {
+      return TransferResult.builder()
+          .rowIndex(pt.record.getRowIndex())
+          .playerName(pt.playerName)
+          .fromTeam(fromTeam).toTeam(toTeam)
+          .rawMotivo(pt.record.getMotivo())
+          .status(TransferResult.Status.BAN_NOT_PROVIDED)
+          .message("Arquivo .ban do clube de origem '" + fromTeam + "' não foi enviado.")
+          .build();
+    }
+    if (!banService.hasBan(toTeam)) {
+      return TransferResult.builder()
+          .rowIndex(pt.record.getRowIndex())
+          .playerName(pt.playerName)
+          .fromTeam(fromTeam).toTeam(toTeam)
+          .rawMotivo(pt.record.getMotivo())
+          .status(TransferResult.Status.BAN_NOT_PROVIDED)
+          .message("Arquivo .ban do clube de destino '" + toTeam + "' não foi enviado.")
+          .build();
+    }
+
+    // Busca o jogador
     try {
-      List<Object> fromPlayers = banService.getPlayerList(banService.getBan(pt.fromTeam));
-      List<Object> toPlayers   = banService.getPlayerList(banService.getBan(pt.toTeam));
+      List<Object> fromPlayers = banService.getPlayerList(banService.getBan(fromTeam));
+      List<Object> toPlayers   = banService.getPlayerList(banService.getBan(toTeam));
 
       Optional<PlayerMatcherService.MatchResult> matchOpt =
           matcher.findBestMatch(fromPlayers, pt.playerName);
 
       if (matchOpt.isEmpty()) {
-        log.warn("Row {}: '{}' não encontrado em '{}'",
-            pt.record.getRowIndex(), pt.playerName, pt.fromTeam);
-        return b.status(TransferResult.Status.NOT_FOUND)
-                .message("Jogador '" + pt.playerName
-                    + "' não encontrado no .ban de '" + pt.fromTeam + "'.")
-                .build();
+        return TransferResult.builder()
+            .rowIndex(pt.record.getRowIndex())
+            .playerName(pt.playerName)
+            .fromTeam(fromTeam).toTeam(toTeam)
+            .rawMotivo(pt.record.getMotivo())
+            .status(TransferResult.Status.NOT_FOUND)
+            .message("Jogador '" + pt.playerName
+                + "' não encontrado no .ban de '" + fromTeam + "'.")
+            .build();
       }
 
       PlayerMatcherService.MatchResult match = matchOpt.get();
       fromPlayers.remove(match.playerObj());
       toPlayers.add(match.playerObj());
 
-      banService.markDirty(pt.fromTeam);
-      banService.markDirty(pt.toTeam);
+      banService.markDirty(fromTeam);
+      banService.markDirty(toTeam);
 
       // Atualiza contadores de elenco
-      String fromKey = banService.resolveTeamKey(pt.fromTeam);
+      String fromKey = banService.resolveTeamKey(fromTeam);
       if (fromKey != null) rosterSize.merge(fromKey, -1, Integer::sum);
       if (toKey   != null) rosterSize.merge(toKey,    1, Integer::sum);
 
       // Bloqueia o jogador para o resto da rodada
       transferredThisSession.add(playerNorm);
 
-      log.info("Row {}: '{}' → '{}' match='{}' {}%",
-          pt.record.getRowIndex(), pt.fromTeam, pt.toTeam,
-          match.matchedName(), String.format("%.0f", match.score() * 100));
+      String dirNote = inverted ? " ↔ Direção corrigida: jogador encontrado no time destinatário." : "";
+      log.info("Row {}: '{}' {} → {} match='{}' {}%{}",
+          pt.record.getRowIndex(), pt.playerName, fromTeam, toTeam,
+          match.matchedName(), String.format("%.0f", match.score() * 100),
+          inverted ? " [invertido]" : "");
 
-      return b.status(TransferResult.Status.SUCCESS)
-              .matchedName(match.matchedName())
-              .matchScore(match.score())
-              .message(String.format("Transferido. Nome no .ban: '%s' (similaridade: %.0f%%)",
-                  match.matchedName(), match.score() * 100))
-              .build();
+      return TransferResult.builder()
+          .rowIndex(pt.record.getRowIndex())
+          .playerName(pt.playerName)
+          .fromTeam(fromTeam).toTeam(toTeam)
+          .rawMotivo(pt.record.getMotivo())
+          .status(TransferResult.Status.SUCCESS)
+          .matchedName(match.matchedName())
+          .matchScore(match.score())
+          .message(String.format("Transferido. Nome no .ban: '%s' (similaridade: %.0f%%)%s",
+              match.matchedName(), match.score() * 100, dirNote))
+          .build();
 
     } catch (Exception e) {
       log.error("Row {}: erro '{}': {}", pt.record.getRowIndex(), pt.playerName, e.getMessage());
-      return b.status(TransferResult.Status.ERROR)
-              .message("Erro inesperado: " + e.getMessage())
-              .build();
+      return TransferResult.builder()
+          .rowIndex(pt.record.getRowIndex())
+          .playerName(pt.playerName)
+          .fromTeam(fromTeam).toTeam(toTeam)
+          .rawMotivo(pt.record.getMotivo())
+          .status(TransferResult.Status.ERROR)
+          .message("Erro inesperado: " + e.getMessage())
+          .build();
     }
   }
 
   // ─── Estado inicial ───────────────────────────────────────────────────────────
 
-  /**
-   * Constrói o mapa de tamanhos de elenco a partir dos .ban carregados.
-   * Usado APENAS para verificar o limite de 30 jogadores.
-   * NÃO é usado para rastrear onde cada jogador está — isso causaria falsos positivos.
-   */
   private Map<String, Integer> buildRosterSizeMap() {
     Map<String, Integer> map = new HashMap<>();
     for (String key : banService.loadedBanKeys()) {
