@@ -190,21 +190,23 @@ public class TransferController {
         ))
         .toList();
 
-    return Map.of(
-        "summary", Map.of(
-            "totalRows",          r.getTotalRows(),
-            "successCount",       r.getSuccessCount(),
-            "notFoundCount",      r.getNotFoundCount(),
-            "banMissingCount",    r.getBanMissingCount(),
-            "rosterFullCount",    r.getRosterFullCount(),
-            "alreadyTransferred", r.getAlreadyTransferred(),
-            "missingTeamCount",   r.getMissingTeamCount(),
-            "financialSkipped",   r.getFinancialSkipped(),
-            "uncertainSkipped",   r.getUncertainSkipped(),
-            "errorCount",         r.getErrorCount(),
-            "modifiedTeams",      r.getModifiedTeams()
-        ),
-        "transfers", items
-    );
+    // Map.of() suporta no máximo 10 entradas — usar LinkedHashMap para o summary
+    java.util.Map<String, Object> summary = new java.util.LinkedHashMap<>();
+    summary.put("totalRows",          r.getTotalRows());
+    summary.put("successCount",       r.getSuccessCount());
+    summary.put("notFoundCount",      r.getNotFoundCount());
+    summary.put("banMissingCount",    r.getBanMissingCount());
+    summary.put("rosterFullCount",    r.getRosterFullCount());
+    summary.put("alreadyTransferred", r.getAlreadyTransferred());
+    summary.put("missingTeamCount",   r.getMissingTeamCount());
+    summary.put("financialSkipped",   r.getFinancialSkipped());
+    summary.put("uncertainSkipped",   r.getUncertainSkipped());
+    summary.put("errorCount",         r.getErrorCount());
+    summary.put("modifiedTeams",      r.getModifiedTeams());
+
+    java.util.Map<String, Object> root = new java.util.LinkedHashMap<>();
+    root.put("summary",   summary);
+    root.put("transfers", items);
+    return root;
   }
 }
