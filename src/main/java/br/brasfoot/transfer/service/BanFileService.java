@@ -114,12 +114,21 @@ public class BanFileService {
 
   /**
    * Resolve o nome do time para a chave interna do mapa.
-   * Estrategia em cascata:
-   *  1. Igualdade exata normalizada             ("ajax" == "ajax")
-   *  2. search contido em key                   ("ajax" in "ajax hol")
-   *  3. key contido em search                   ("psv" in "psv eindhoven")
-   *  4. Primeiro token igual                    ("sparta" == "sparta" de "sparta hol")
-   *  5. Fuzzy Jaro-Winkler >= 0.88 em qualquer token do key vs search
+   *
+   * Estratégia em cascata com scoring preciso:
+   *  0. Mapeamento manual → prioridade absoluta
+   *  1. Exato               ("cruzeiro" == "cruzeiro")           → score 1000
+   *  2. Prefixo + número    ("cruzeiro" → "cruzeiro 26")         → score 900
+   *  3. Prefixo proporcional("ajax" → "ajax hol")                → score 400 * ratio
+   *  4. Search contém key  ("cruzeiro rs" contém "cruzeiro")     → score 300 * ratio
+   *     NOTA: step 4 tem score intencionalm. menor que step 3 para evitar
+   *     que "Cruzeiro" (search) resolva para key "cruzeiro" quando "cruzeiro rs"
+   *     também existe com score maior no step 3.
+   *  5. Primeiro token igual                                      → score 250
+   *  6. Jaro-Winkler >= 0.85 no string completo                  → score JW * 100
+   *
+   * Ambiguidade: quando dois candidatos estão a menos de 50 pontos de diferença,
+   * registra um aviso para facilitar diagnóstico.
    */
   private String resolveKey(String teamName) {
     if (teamName == null || teamName.isBlank()) return null;
@@ -134,38 +143,70 @@ public class BanFileService {
     // 1. Exato
     if (loadedBans.containsKey(search)) return search;
 
-    String bestKey   = null;
-    double bestScore = 0.0;
+    String bestKey    = null;
+    double bestScore  = 0.0;
+    String secondKey  = null;
+    double secondScore = 0.0;
 
     for (String key : loadedBans.keySet()) {
-      double score = 0.0;
+      double score = computeMatchScore(search, key);
 
-      // 2. search contido em key  ("ajax" in "ajax hol")
-      if (key.contains(search)) {
-        score = 4.0;
+      if (score > bestScore) {
+        secondScore = bestScore; secondKey = bestKey;
+        bestScore   = score;     bestKey   = key;
+      } else if (score > secondScore) {
+        secondScore = score; secondKey = key;
       }
-      // 3. key contido em search  ("psv" in "psv eindhoven")
-      else if (search.contains(key)) {
-        score = 3.0;
-      }
-      else {
-        // 4. Primeiro token do key == primeiro token do search
-        String keyFirst    = key.split("\\s+")[0];
-        String searchFirst = search.split("\\s+")[0];
-        if (keyFirst.equals(searchFirst) && keyFirst.length() >= 3) {
-          score = 2.5;
-        }
-        // 5. Fuzzy: maior similaridade Jaro-Winkler entre tokens do key e do search
-        else {
-          double fuzzy = bestFuzzy(key, search);
-          if (fuzzy >= 0.88) score = fuzzy;
-        }
-      }
-
-      if (score > bestScore) { bestScore = score; bestKey = key; }
     }
 
-    return (bestScore > 0) ? bestKey : null;
+    if (bestKey != null && bestScore > 0) {
+      // Avisa quando a resolução é ambígua (candidatos muito próximos)
+      if (secondKey != null && (bestScore - secondScore) < 50.0) {
+        org.slf4j.LoggerFactory.getLogger(BanFileService.class)
+            .warn("Resolução ambígua: '{}' → '{}' (score={:.0f}) vs '{}' (score={:.0f}). "
+                + "Use mapeamento manual para garantir o time correto.",
+                teamName, bestKey, bestScore, secondKey, secondScore);
+      }
+      return bestKey;
+    }
+    return null;
+  }
+
+  private double computeMatchScore(String search, String key) {
+    if (search.equals(key)) return 1000.0; // exato (já tratado no caller)
+
+    // Step 2: key começa com search E sufixo é apenas número (ex: "cruzeiro 26")
+    if (key.startsWith(search + " ")) {
+      String suffix = key.substring(search.length()).strip();
+      if (suffix.matches("\\d+")) return 900.0; // prefixo + número = quase exato
+    }
+
+    // Step 3: key contém search — pontuação proporcional à cobertura
+    if (key.contains(search)) {
+      double ratio = (double) search.length() / key.length();
+      return 400.0 * ratio;
+    }
+
+    // Step 4: search contém key — score menor que step 3 para evitar falso positivo
+    // Ex: search="cruzeiro rs" contém key="cruzeiro" → score 300 * ratio
+    // Isso garante que "cruzeiro rs" (key) bate "cruzeiro" (key) quando se busca "cruzeiro rs"
+    if (search.contains(key)) {
+      double ratio = (double) key.length() / search.length();
+      return 300.0 * ratio;
+    }
+
+    // Step 5: primeiro token igual
+    String[] keyTokens    = key.split("\\s+");
+    String[] searchTokens = search.split("\\s+");
+    if (keyTokens[0].equals(searchTokens[0]) && keyTokens[0].length() >= 3) {
+      return 250.0;
+    }
+
+    // Step 6: Jaro-Winkler no string completo
+    double jw = jaroWinkler(search, key);
+    if (jw >= 0.85) return jw * 100.0;
+
+    return 0.0;
   }
 
   /** Maior similaridade Jaro-Winkler entre qualquer par de tokens de a e b */
