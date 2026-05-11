@@ -19,17 +19,21 @@ import java.util.List;
 /**
  * Lê arquivos Excel (.xlsx) ou CSV e retorna lista de {@link TransferRecord}.
  *
- * Suporta dois formatos de planilha:
+ * Suporta três formatos de planilha:
  *
- * FORMATO A (antigo – vírgula, EBL original):
+ * FORMATO A (vírgula, EBL original):
  *   Origem (Time) | Destino (Time) | Divisao | Valor (Milhões) | Motivo | Data
  *
- * FORMATO B (novo – ponto-e-vírgula, sistema de transações):
- *   ID | Data/Hora | Time Remetente | Remetente (Nome) | Remetente (E-mail)
- *   | Time Destinatário | Destinatário (Nome) | Destinatário (E-mail)
- *   | Valor (R$) | Motivo | Saldo Antes (R$) | Saldo Depois (R$)
+ * FORMATO B (ponto-e-vírgula, sistema de transações financeiras):
+ *   ID | Data/Hora | Time Remetente | ... | Time Destinatário | ... | Motivo | ...
+ *   Remetente = comprador | Destinatário = vendedor (cede o jogador)
  *
- * A detecção é automática pelo cabeçalho.
+ * FORMATO C (ponto-e-vírgula, planilha direta de transferências):
+ *   ID | Data/Hora | Jogador | Time Origem | Time Destino | Status
+ *   Formato mais simples: jogador e times em colunas dedicadas.
+ *   Apenas linhas com Status = "concluido" são processadas.
+ *
+ * A detecção é automática pelo cabeçalho (Formato C detectado pela presença de "Jogador").
  */
 @Service
 public class ExcelParserService {
@@ -111,12 +115,19 @@ public class ExcelParserService {
     String raw = new String(bytes, StandardCharsets.UTF_8)
         .replace("\uFEFF", ""); // Remove BOM
 
-    // Detecta separador: se a primeira linha tem mais ";" do que ","
+    // Detecta separador e formato pelo cabeçalho
     String firstLine = raw.lines().findFirst().orElse("");
     char delimiter = firstLine.chars().filter(c -> c == ';').count()
         > firstLine.chars().filter(c -> c == ',').count() ? ';' : ',';
 
     if (delimiter == ';') {
+      // Formato C: tem coluna "Jogador" dedicada no cabeçalho
+      String firstLineLower = firstLine.toLowerCase();
+      if (firstLineLower.contains("jogador")
+          && firstLineLower.contains("origem")
+          && firstLineLower.contains("destino")) {
+        return parseCsvFormatoC(raw, delimiter);
+      }
       return parseCsvFormatoB(raw, delimiter);
     } else {
       return parseCsvFormatoA(raw, delimiter);
@@ -196,6 +207,69 @@ public class ExcelParserService {
 
         if (origem.isBlank() && destino.isBlank() && motivo.isBlank()) { rowNum++; continue; }
         records.add(new TransferRecord(rowNum++, origem, destino, "", valor, motivo, data));
+      }
+    }
+    return records;
+  }
+
+  /**
+   * FORMATO C — ponto-e-vírgula com colunas dedicadas:
+   *   ID | Data/Hora | Jogador | Time Origem | Time Destino | Status
+   *
+   * Swap intencional de origem/destino: BanTransferService usa
+   *   fromTeam = record.getDestino()  e  toTeam = record.getOrigem()
+   * Por isso armazenamos Time Origem em destino e Time Destino em origem
+   * para que o resultado após o swap seja o correto.
+   */
+  private List<TransferRecord> parseCsvFormatoC(String raw, char delimiter) throws IOException {
+    List<TransferRecord> records = new ArrayList<>();
+
+    try (Reader reader = new java.io.StringReader(raw);
+         CSVParser parser = CSVFormat.DEFAULT.builder()
+             .setDelimiter(delimiter)
+             .setHeader()
+             .setSkipHeaderRecord(true)
+             .setIgnoreHeaderCase(true)
+             .setTrim(true)
+             .setQuote('"')
+             .build()
+             .parse(reader)) {
+
+      java.util.Map<String, Integer> headerMap = parser.getHeaderMap();
+      int jogadorIdx     = resolveIdx(headerMap, 2, "jogador");
+      int timeOrigemIdx  = resolveIdx(headerMap, 3, "time origem", "origem");
+      int timeDestinoIdx = resolveIdx(headerMap, 4, "time destino", "destino");
+      int statusIdx      = resolveIdx(headerMap, 5, "status");
+      int dataIdx        = resolveIdx(headerMap, 1, "data/hora", "data");
+
+      int rowNum = 2;
+      for (CSVRecord r : parser) {
+        // Filtra por status — só processa transferências concluídas
+        String status = safeGetByIdx(r, statusIdx).toLowerCase().strip();
+        if (!status.isBlank()
+            && !status.equals("concluido")
+            && !status.equals("concluída")
+            && !status.equals("concluida")) {
+          rowNum++;
+          continue;
+        }
+
+        String jogador     = safeGetByIdx(r, jogadorIdx);
+        String timeOrigem  = safeGetByIdx(r, timeOrigemIdx);
+        String timeDestino = safeGetByIdx(r, timeDestinoIdx);
+        String data        = safeGetByIdx(r, dataIdx);
+
+        if (jogador.isBlank() && timeOrigem.isBlank() && timeDestino.isBlank()) {
+          rowNum++;
+          continue;
+        }
+
+        // Swap: BanTransferService lê fromTeam=getDestino(), toTeam=getOrigem()
+        // Então: origem=timeDestino (recebe), destino=timeOrigem (cede)
+        records.add(new TransferRecord(rowNum++,
+            timeDestino,  // getOrigem() → toTeam (time que recebe)
+            timeOrigem,   // getDestino() → fromTeam (time que cede)
+            "", "", jogador, data));
       }
     }
     return records;
